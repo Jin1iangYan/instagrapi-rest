@@ -9,9 +9,9 @@ EXPOSE 8000
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 ENV PIP_NO_CACHE_DIR=1
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app
-COPY . /app/
-WORKDIR /app
+ENV PYTHONPATH=/app/instagrapi-rest
+COPY . /app/instagrapi-rest/
+WORKDIR /app/instagrapi-rest
 RUN pip install -r requirements.txt
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
