@@ -28,6 +28,7 @@ async def hashtag_medias_v1_chunk(
     results = client.hashtag_medias_v1_chunk(
         name=name,
         max_id=max_id,
+        max_amount=30,
         tab_key="recent"
     )
     
