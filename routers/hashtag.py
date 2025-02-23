@@ -35,7 +35,7 @@ async def hashtag_medias_v1_chunk(
 
 @router.get("/v1/search/hashtags", response_model=List)
 async def get_hashtag_info(
-    name: str,
+    query: str,
     client: Client = Depends(get_client)
 ) -> List:
     """
@@ -48,9 +48,9 @@ async def get_hashtag_info(
         List[str]: List of related hashtags.
     """
     # Remove # if present
-    name = name.lstrip("#")
+    query = query.lstrip("#")
     
     # Fetch related hashtags from the Instagram API
-    related_hashtags = client.search_hashtags(name)
+    related_hashtags = client.search_hashtags(query)
 
     return related_hashtags
