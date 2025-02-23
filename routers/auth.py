@@ -25,6 +25,9 @@ class LoginRequest(BaseModel):
 class SessionLoginRequest(BaseModel):
     sessionid: str
 
+class SessionLogoutRequest(BaseModel):
+    sessionid: str
+
 class LoginResponse(BaseModel):
     status: str
     sessionid: str
@@ -145,7 +148,7 @@ async def login_by_sessionid(request: SessionLoginRequest):
         raise HTTPException(status_code=401, detail=str(e))
 
 @router.post("/logout")
-async def logout(sessionid: str):
+async def logout(request: SessionLogoutRequest):
     """Logout and remove session from database
     
     Args:
@@ -157,7 +160,7 @@ async def logout(sessionid: str):
     try:
         # Remove from database
         db.table('_default').remove(
-            lambda x: x.get('sessionid') == sessionid
+            lambda x: x.get('sessionid') == request.sessionid
         )
         return {"status": "ok"}
     except Exception as e:
