@@ -1,8 +1,12 @@
 import json
 from unittest.mock import patch
 from typing import Optional, Dict
-from fastapi import APIRouter, Depends, Form
+from fastapi import APIRouter, Depends, Form, HTTPException
 from dependencies import ClientStorage, get_clients
+from pydantic import BaseModel
+from instagrapi import Client
+from tinydb import TinyDB
+from datetime import datetime
 
 router = APIRouter(
     prefix="/auth",
@@ -10,36 +14,101 @@ router = APIRouter(
     responses={404: {"description": "Not found"}}
 )
 
+db = TinyDB('db.json')
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class SessionLoginRequest(BaseModel):
+    sessionid: str
 
 @router.post("/login")
-async def auth_login(username: str = Form(...),
-                     password: str = Form(...),
-                     verification_code: Optional[str] = Form(""),
-                     proxy: Optional[str] = Form(""),
-                     locale: Optional[str] = Form(""),
-                     timezone: Optional[str] = Form(""),
-                     clients: ClientStorage = Depends(get_clients)) -> str:
-    """Login by username and password with 2FA
+async def login(request: LoginRequest):
+    """Login to Instagram using username and password
+    
+    Args:
+        request: Login credentials
+        
+    Returns:
+        dict: Session information
     """
-    cl = clients.client()
-    if proxy != "":
-        cl.set_proxy(proxy)
+    try:
+        client = Client()
+        client.login(request.username, request.password)
+        
+        # Get the session data
+        session_data = {
+            "sessionid": client.sessionid,
+            "settings": json.dumps({
+                "last_login": datetime.now().timestamp(),
+                "user_id": client.user_id,
+                "username": request.username
+            })
+        }
+        
+        # Save to database
+        db.table('_default').insert(session_data)
+        
+        return {
+            "status": "ok",
+            "sessionid": client.sessionid
+        }
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=str(e))
 
-    if locale != "":
-        cl.set_locale(locale)
+@router.post("/login/by_sessionid")
+async def login_by_sessionid(request: SessionLoginRequest):
+    """Login to Instagram using an existing session ID
+    
+    Args:
+        request: Session ID
+        
+    Returns:
+        dict: Session information
+    """
+    try:
+        client = Client()
+        client.login_by_sessionid(request.sessionid)
+        
+        # Get the session data
+        session_data = {
+            "sessionid": request.sessionid,
+            "settings": json.dumps({
+                "last_login": datetime.now().timestamp(),
+                "user_id": client.user_id,
+                "username": client.username
+            })
+        }
+        
+        # Save to database
+        db.table('_default').insert(session_data)
+        
+        return {
+            "status": "ok",
+            "sessionid": request.sessionid
+        }
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=str(e))
 
-    if timezone != "":
-        cl.set_timezone_offset(timezone)
-
-    # We're mocking the input
-    with patch('builtins.input', return_value=verification_code):
-        result = cl.login(username, password)
-
-    if result:
-        clients.set(cl)
-        return cl.sessionid
-    return result
-
+@router.post("/logout")
+async def logout(sessionid: str):
+    """Logout and remove session from database
+    
+    Args:
+        sessionid: Session ID to logout
+        
+    Returns:
+        dict: Status message
+    """
+    try:
+        # Remove from database
+        db.table('_default').remove(
+            lambda x: x.get('sessionid') == sessionid
+        )
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/login_by_sessionid")
 async def auth_login_by_sessionid(sessionid: str = Form(...),
