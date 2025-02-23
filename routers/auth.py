@@ -1,12 +1,14 @@
 import json
 from unittest.mock import patch
-from typing import Optional, Dict
-from fastapi import APIRouter, Depends, Form, HTTPException
+from typing import Optional, Dict, Union
+from fastapi import APIRouter, Depends, Form, HTTPException, status
 from dependencies import ClientStorage, get_clients
 from pydantic import BaseModel
 from instagrapi import Client
 from tinydb import TinyDB
 from datetime import datetime
+from instagrapi.exceptions import ClientLoginRequired, ClientError, ClientConnectionError
+import asyncio
 
 router = APIRouter(
     prefix="/auth",
@@ -23,7 +25,55 @@ class LoginRequest(BaseModel):
 class SessionLoginRequest(BaseModel):
     sessionid: str
 
-@router.post("/login")
+class LoginResponse(BaseModel):
+    status: str
+    sessionid: str
+    error: Optional[str] = None
+
+async def _try_login(client: Client, username: str, password: str, max_retries: int = 2) -> Union[dict, Exception]:
+    """Try to login with retries
+    
+    Args:
+        client: Instagram client
+        username: Instagram username
+        password: Instagram password
+        max_retries: Maximum number of retry attempts
+        
+    Returns:
+        dict: Session information on success
+        Exception: Error on failure
+    """
+    retry_count = 0
+    while retry_count <= max_retries:
+        try:
+            # Use asyncio.wait_for to implement timeout
+            await asyncio.wait_for(
+                asyncio.to_thread(client.login, username, password),
+                timeout=30.0  # 30 seconds timeout
+            )
+            
+            return {
+                "sessionid": client.sessionid,
+                "settings": json.dumps({
+                    "last_login": datetime.now().timestamp(),
+                    "user_id": client.user_id,
+                    "username": username
+                })
+            }
+        except asyncio.TimeoutError:
+            retry_count += 1
+            if retry_count > max_retries:
+                return asyncio.TimeoutError("Login request timed out after multiple retries")
+            await asyncio.sleep(1)  # Wait before retry
+        except ClientConnectionError as e:
+            retry_count += 1
+            if retry_count > max_retries:
+                return e
+            await asyncio.sleep(1)  # Wait before retry
+        except Exception as e:
+            return e
+
+@router.post("/login", response_model=LoginResponse)
 async def login(request: LoginRequest):
     """Login to Instagram using username and password
     
@@ -31,31 +81,34 @@ async def login(request: LoginRequest):
         request: Login credentials
         
     Returns:
-        dict: Session information
+        LoginResponse: Session information and status
     """
-    try:
-        client = Client()
-        client.login(request.username, request.password)
+    client = Client()
+    result = await _try_login(client, request.username, request.password)
+    
+    if isinstance(result, Exception):
+        error_msg = str(result)
+        status_code = status.HTTP_401_UNAUTHORIZED
         
-        # Get the session data
-        session_data = {
-            "sessionid": client.sessionid,
-            "settings": json.dumps({
-                "last_login": datetime.now().timestamp(),
-                "user_id": client.user_id,
-                "username": request.username
-            })
-        }
-        
-        # Save to database
-        db.table('_default').insert(session_data)
-        
-        return {
-            "status": "ok",
-            "sessionid": client.sessionid
-        }
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        if isinstance(result, ClientConnectionError):
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            error_msg = "Connection to Instagram failed. Please try again later."
+        elif isinstance(result, asyncio.TimeoutError):
+            status_code = status.HTTP_504_GATEWAY_TIMEOUT
+            error_msg = "Login request timed out. Please try again."
+            
+        raise HTTPException(
+            status_code=status_code,
+            detail=error_msg
+        )
+    
+    # Save to database
+    db.table('_default').insert(result)
+    
+    return LoginResponse(
+        status="ok",
+        sessionid=result["sessionid"]
+    )
 
 @router.post("/login/by_sessionid")
 async def login_by_sessionid(request: SessionLoginRequest):
